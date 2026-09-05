@@ -1,0 +1,5 @@
+**/*.gen.go linguist-generated=true
+**/*_mock_test.go linguist-generated=true
+/api/database/** linguist-generated=true
+/api/openapi/oas_*_gen.go linguist-generated=true
+/web/src/client/** linguist-generated=true

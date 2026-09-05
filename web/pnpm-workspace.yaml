@@ -1,0 +1,7 @@
+allowBuilds:
+  esbuild: true
+  sharp: true
+peerDependencyRules:
+  allowedVersions:
+    # The renderer develops against Preact 11, but its published peer range ends at 10.
+    '@storybook/preact@10.6.7>preact': 11.2.0
