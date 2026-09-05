@@ -1,0 +1,8 @@
+generator:
+  convenient_errors: off
+  features:
+    disable_all: true
+    enable:
+      - ogen/otel
+      - ogen/unimplemented
+      - paths/server
