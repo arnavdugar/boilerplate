@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.local
+.local-backups/
+.pnpm-store/
+.tiltbuild/
+/s3mock-data/
+gha-creds-*.json
+infra/.terraform/
+infra/*.auto.tfvars
+infra/*.tfplan
+infra/*.tfstate
+infra/*.tfstate.*
+secrets.env
+web/dist/
+web/node_modules/

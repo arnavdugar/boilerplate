@@ -1,0 +1,40 @@
+openapi: 3.0.3
+info:
+  title: App API
+  version: 0.1.0
+tags:
+  - name: hello
+    description: Temporary scaffold example.
+paths:
+  /api/v1/hello:
+    get:
+      operationId: getHello
+      summary: Return the scaffold greeting
+      tags: [hello]
+      responses:
+        '200':
+          description: Greeting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Hello'
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated UUID scoped by the application to the caller, operation, and resource.
+        Successful writes are replayed for 24 hours. Reusing a key with different input returns 409.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Hello:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string

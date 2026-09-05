@@ -1,0 +1,12 @@
+aiven_cloud_name              = null
+aiven_postgres_plan           = "free-1-1gb"
+aiven_project_name            = "your-aiven-project"
+cloudflare_account_id         = "00000000000000000000000000000000"
+cloudflare_pages_project_name = "your-app-web"
+github_owner                  = "your-github-owner"
+github_repository_name        = "your-repository"
+google_project_id             = "your-google-project"
+google_region                 = "us-west1"
+name                          = "your-app"
+r2_location                   = "wnam"
+sentry_organization           = "your-sentry-organization"

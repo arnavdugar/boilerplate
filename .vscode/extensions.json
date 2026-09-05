@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "EditorConfig.EditorConfig",
+    "esbenp.prettier-vscode",
+    "GitHub.vscode-github-actions",
+    "golang.go",
+    "hashicorp.hcl",
+    "hashicorp.terraform",
+    "ms-azuretools.vscode-containers",
+    "redhat.vscode-yaml",
+    "tilt-dev.tiltfile"
+  ]
+}
