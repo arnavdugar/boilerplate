@@ -1,0 +1,174 @@
+name: API
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/api.yml"
+      - "api/**"
+      - "atlas.hcl"
+      - "migrations/**"
+      - "schema/openapi.yaml"
+      - "scripts/generate.sh"
+      - "scripts/test-db.sh"
+  push:
+    paths:
+      - ".github/workflows/api.yml"
+      - "api/**"
+      - "atlas.hcl"
+      - "migrations/**"
+      - "schema/openapi.yaml"
+      - "scripts/generate.sh"
+      - "scripts/test-db.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Detect database changes
+        if: github.event_name != 'workflow_dispatch'
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          # PRs use their base branch; pushes compare with the pre-push commit.
+          base: ${{ github.ref }}
+          filters: |
+            database:
+              - 'migrations/**'
+              - 'api/queries/**'
+              - 'api/schema.sql'
+              - 'api/seed.sql'
+              - 'api/database/**'
+              - 'api/**/*_integration_test.go'
+              - 'api/sqlc.yaml'
+              - 'api/generate.go'
+              - 'api/go.mod'
+              - 'api/go.sum'
+              - 'atlas.hcl'
+              - 'scripts/test-db.sh'
+              - 'scripts/generate.sh'
+              - '.github/workflows/api.yml'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ariga/setup-atlas@v0
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.database == 'true'
+        with:
+          version: v1.3.0
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Verify generated code
+        run: |
+          ./scripts/generate.sh
+          git diff --exit-code -- api web/src/api/schema.d.ts
+          test -z "$(git ls-files --others --exclude-standard -- api web/src/api/schema.d.ts)"
+      - name: Vet sqlc queries
+        working-directory: api
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.29.0 vet
+      - name: Check sqlc schema consistency
+        working-directory: api
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.29.0 diff
+      - name: Test API unit tests
+        working-directory: api
+        run: go test -race ./...
+      - name: Validate migrations and test API against Postgres
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.database == 'true'
+        run: ./scripts/test-db.sh -race
+
+  deploy:
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: validate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: api-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check deployment configuration
+        shell: bash
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          GCP_CLOUD_RUN_SERVICE: ${{ vars.GCP_CLOUD_RUN_SERVICE }}
+          GCP_DATABASE_SECRET: ${{ vars.GCP_DATABASE_SECRET }}
+        run: |
+          missing=0
+          for setting in GCP_WORKLOAD_IDENTITY_PROVIDER GCP_DEPLOY_SERVICE_ACCOUNT GCP_PROJECT_ID GCP_REGION GCP_ARTIFACT_REPOSITORY GCP_CLOUD_RUN_SERVICE GCP_DATABASE_SECRET; do
+            if [[ -z "${!setting:-}" ]]; then
+              echo "::error::Missing deployment setting: $setting. Configure it using infra/README.md."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ariga/setup-atlas@v0
+        with:
+          version: v1.3.0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Configure Artifact Registry authentication
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+      - name: Build and push API image
+        env:
+          GCP_ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: |
+          image="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_ARTIFACT_REPOSITORY/api:$GITHUB_SHA"
+          docker build --tag "$image" api
+          docker push "$image"
+          echo "API_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Apply database migrations
+        env:
+          GCP_DATABASE_SECRET: ${{ vars.GCP_DATABASE_SECRET }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          DATABASE_URL=$(gcloud secrets versions access latest --secret "$GCP_DATABASE_SECRET" --project "$GCP_PROJECT_ID")
+          echo "::add-mask::$DATABASE_URL"
+          export DATABASE_URL
+          atlas migrate apply --env app
+      - name: Deploy API image to Cloud Run
+        env:
+          GCP_CLOUD_RUN_SERVICE: ${{ vars.GCP_CLOUD_RUN_SERVICE }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: >-
+          gcloud run deploy "$GCP_CLOUD_RUN_SERVICE"
+          --image "$API_IMAGE"
+          --project "$GCP_PROJECT_ID"
+          --region "$GCP_REGION"
+          --quiet

@@ -1,0 +1,37 @@
+name: Infra
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/infra.yml"
+      - "infra/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/infra.yml"
+      - "infra/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+      - name: Initialize Terraform
+        run: terraform init -backend=false -input=false
+      - name: Validate configuration
+        run: terraform validate
