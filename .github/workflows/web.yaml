@@ -1,0 +1,105 @@
+name: Web
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/web.yaml'
+      - 'schema/openapi.yaml'
+      - 'web/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/web.yaml'
+      - 'schema/openapi.yaml'
+      - 'web/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Type-check and build
+        working-directory: web
+        run: pnpm build
+      - name: Test Pages Worker
+        working-directory: web
+        run: pnpm test:worker
+      - name: Check formatting
+        working-directory: web
+        run: pnpm format:check
+
+  deploy:
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' && (github.event_name ==
+      'push' || github.event_name == 'workflow_dispatch')
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    concurrency:
+      group: cloudflare-pages
+      cancel-in-progress: true
+    steps:
+      - name: Check deployment configuration
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          VITE_ENVIRONMENT: ${{ vars.VITE_ENVIRONMENT }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+        run: |
+          missing=0
+          for setting in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_PAGES_PROJECT CLOUDFLARE_PAGES_API_TOKEN VITE_ENVIRONMENT VITE_SENTRY_DSN; do
+            if [[ -z "${!setting:-}" ]]; then
+              echo "::error::Missing deployment setting: $setting. Configure it using infra/README.md."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Build static site
+        working-directory: web
+        env:
+          VITE_ENVIRONMENT: ${{ vars.VITE_ENVIRONMENT }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+        run: pnpm build
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web/dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
